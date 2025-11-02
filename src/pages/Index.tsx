@@ -163,12 +163,20 @@ const Index = () => {
       return;
     }
 
-    const socket = new GameWebSocket(handleMessage);
+    const socket = new GameWebSocket(handleMessage, (error) => {
+      toast({
+        title: "Erreur de connexion",
+        description: "Impossible de se connecter au serveur",
+        variant: "destructive",
+      });
+    });
     socket.connect();
     setWs(socket);
     
     setTimeout(() => {
-      socket.send({ type: 'join', code: joinCode.toUpperCase() });
+      const formattedCode = joinCode.trim().toUpperCase();
+      console.log("Joining room with code:", formattedCode);
+      socket.send({ type: 'join', code: formattedCode });
     }, 500);
   };
 
@@ -288,6 +296,10 @@ const Index = () => {
             <p className="text-xl text-muted-foreground">
               Partagez ce code avec votre ami !
             </p>
+            <div className="text-sm text-muted-foreground/60 mt-4 p-4 bg-background/50 rounded">
+              <p>⚠️ Important : Les deux joueurs doivent rester sur cette page</p>
+              <p>Si vous rafraîchissez, la room sera perdue</p>
+            </div>
           </div>
         )}
 

@@ -78,6 +78,8 @@ serve(async (req) => {
           };
 
           rooms.set(roomCode, currentRoom);
+          console.log("Room created with code:", roomCode);
+          console.log("Total rooms:", rooms.size);
 
           socket.send(JSON.stringify({
             type: 'room_created',
@@ -88,11 +90,14 @@ serve(async (req) => {
           break;
 
         case 'join':
+          console.log("Join request for code:", data.code);
+          console.log("Available rooms:", Array.from(rooms.keys()));
           const room = rooms.get(data.code);
           if (!room) {
+            console.log("Room not found for code:", data.code);
             socket.send(JSON.stringify({
               type: 'error',
-              message: 'Room not found',
+              message: `Room not found. Code: ${data.code}. Available: ${Array.from(rooms.keys()).join(', ')}`,
             }));
             return;
           }
