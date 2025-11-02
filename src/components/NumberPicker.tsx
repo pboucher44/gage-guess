@@ -7,6 +7,7 @@ interface NumberPickerProps {
 }
 
 const NumberPicker = ({ maxNumber, onSelect, disabled }: NumberPickerProps) => {
+  // Génère les chiffres de 2 à maxNumber inclus
   const numbers = Array.from({ length: maxNumber - 1 }, (_, i) => i + 2);
 
   return (

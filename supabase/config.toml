@@ -1,1 +1,4 @@
 project_id = "xbvcyrcrgoqyhbryqdrd"
+
+[functions.game-socket]
+verify_jwt = false
