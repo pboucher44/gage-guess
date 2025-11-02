@@ -20,10 +20,24 @@ interface Room {
   state: 'waiting' | 'playing' | 'result' | 'gameover';
 }
 
-const rooms = new Map<string, Room>();
+type GlobalWithRooms = typeof globalThis & {
+  __gageGuessRooms?: Map<string, Room>;
+};
+
+const globalScope = globalThis as GlobalWithRooms;
+
+if (!globalScope.__gageGuessRooms) {
+  globalScope.__gageGuessRooms = new Map<string, Room>();
+}
+
+const rooms = globalScope.__gageGuessRooms;
 
 function generateRoomCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
+}
+
+function normalizeRoomCode(code: string): string {
+  return code.trim().toUpperCase();
 }
 
 function broadcastToRoom(room: Room, message: any, excludeId?: string) {
@@ -60,7 +74,7 @@ serve(async (req) => {
 
       switch (data.type) {
         case 'create':
-          const roomCode = generateRoomCode();
+          const roomCode = normalizeRoomCode(generateRoomCode());
           const playerId = crypto.randomUUID();
           
           currentPlayer = {
@@ -90,14 +104,23 @@ serve(async (req) => {
           break;
 
         case 'join':
-          console.log("Join request for code:", data.code);
-          console.log("Available rooms:", Array.from(rooms.keys()));
-          const room = rooms.get(data.code);
-          if (!room) {
-            console.log("Room not found for code:", data.code);
+          if (typeof data.code !== 'string') {
             socket.send(JSON.stringify({
               type: 'error',
-              message: `Room not found. Code: ${data.code}. Available: ${Array.from(rooms.keys()).join(', ')}`,
+              message: 'Invalid room code',
+            }));
+            return;
+          }
+
+          const requestedCode = normalizeRoomCode(data.code);
+          console.log("Join request for code:", requestedCode);
+          console.log("Available rooms:", Array.from(rooms.keys()));
+          const room = rooms.get(requestedCode);
+          if (!room) {
+            console.log("Room not found for code:", requestedCode);
+            socket.send(JSON.stringify({
+              type: 'error',
+              message: `Room not found. Code: ${requestedCode}. Available: ${Array.from(rooms.keys()).join(', ')}`,
             }));
             return;
           }
