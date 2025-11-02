@@ -20,8 +20,17 @@ interface Room {
   state: 'waiting' | 'playing' | 'result' | 'gameover';
 }
 
-const rooms: Map<string, Room> = (globalThis as unknown as { __gageGuessRooms?: Map<string, Room> }).__gageGuessRooms ?? new Map<string, Room>();
-(globalThis as unknown as { __gageGuessRooms?: Map<string, Room> }).__gageGuessRooms = rooms;
+type GlobalWithRooms = typeof globalThis & {
+  __gageGuessRooms?: Map<string, Room>;
+};
+
+const globalScope = globalThis as GlobalWithRooms;
+
+if (!globalScope.__gageGuessRooms) {
+  globalScope.__gageGuessRooms = new Map<string, Room>();
+}
+
+const rooms = globalScope.__gageGuessRooms;
 
 function generateRoomCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
