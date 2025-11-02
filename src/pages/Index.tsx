@@ -56,6 +56,7 @@ const Index = () => {
         setPlayerId(data.playerId);
         setIsHost(false);
         setMaxNumber(data.maxNumber);
+        setGameState('waiting');
         toast({
           title: "Room rejointe !",
           description: "En attente du second joueur...",
