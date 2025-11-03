@@ -14,13 +14,74 @@ export type Database = {
   }
   public: {
     Tables: {
-      [_ in never]: never
+      game_players: {
+        Row: {
+          created_at: string
+          id: string
+          is_host: boolean
+          number: number | null
+          player_id: string
+          room_code: string
+        }
+        Insert: {
+          created_at?: string
+          id?: string
+          is_host?: boolean
+          number?: number | null
+          player_id: string
+          room_code: string
+        }
+        Update: {
+          created_at?: string
+          id?: string
+          is_host?: boolean
+          number?: number | null
+          player_id?: string
+          room_code?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "game_players_room_code_fkey"
+            columns: ["room_code"]
+            isOneToOne: false
+            referencedRelation: "game_rooms"
+            referencedColumns: ["code"]
+          },
+        ]
+      }
+      game_rooms: {
+        Row: {
+          code: string
+          created_at: string
+          has_used_reverse: boolean
+          max_number: number
+          state: string
+          updated_at: string
+        }
+        Insert: {
+          code: string
+          created_at?: string
+          has_used_reverse?: boolean
+          max_number: number
+          state?: string
+          updated_at?: string
+        }
+        Update: {
+          code?: string
+          created_at?: string
+          has_used_reverse?: boolean
+          max_number?: number
+          state?: string
+          updated_at?: string
+        }
+        Relationships: []
+      }
     }
     Views: {
       [_ in never]: never
     }
     Functions: {
-      [_ in never]: never
+      cleanup_old_rooms: { Args: never; Returns: undefined }
     }
     Enums: {
       [_ in never]: never
