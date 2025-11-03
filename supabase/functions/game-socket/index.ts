@@ -239,11 +239,18 @@ serve(async (req) => {
               .from('game_rooms')
               .update({ state: 'playing' })
               .eq('code', requestedCode);
+            
+            // Send game_start to current player
+            socket.send(JSON.stringify({
+              type: 'game_start',
+              maxNumber: roomData.max_number,
+            }));
               
+            // Also broadcast to other players
             await broadcastToRoom(requestedCode, {
               type: 'game_start',
               maxNumber: roomData.max_number,
-            });
+            }, newPlayerId);
           }
           break;
 

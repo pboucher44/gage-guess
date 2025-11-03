@@ -59,7 +59,7 @@ const Index = () => {
         setGameState('waiting');
         toast({
           title: "Room rejointe !",
-          description: "En attente du second joueur...",
+          description: "Connexion établie, la partie va commencer...",
         });
         break;
 
