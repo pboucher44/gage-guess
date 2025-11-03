@@ -52,12 +52,14 @@ async function getRoomPlayers(roomCode: string): Promise<Player[]> {
     .select('*')
     .eq('room_code', roomCode);
   
-  return (data || []).map(p => ({
-    id: p.player_id,
-    socket: sockets.get(p.player_id)!.socket,
-    isHost: p.is_host,
-    number: p.number,
-  })).filter(p => p.socket);
+  return (data || [])
+    .filter(p => sockets.has(p.player_id))
+    .map(p => ({
+      id: p.player_id,
+      socket: sockets.get(p.player_id)!.socket,
+      isHost: p.is_host,
+      number: p.number,
+    }));
 }
 
 async function broadcastToRoom(roomCode: string, message: any, excludeId?: string) {
