@@ -1,9 +1,14 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from 'https://esm.sh/@supabase/supabase-js@2.39.3';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Headers': 'authorization, x-client-info, apikey, content-type',
 };
+
+const supabaseUrl = Deno.env.get('SUPABASE_URL')!;
+const supabaseKey = Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!;
+const supabase = createClient(supabaseUrl, supabaseKey);
 
 interface Player {
   id: string;
@@ -20,17 +25,18 @@ interface Room {
   state: 'waiting' | 'playing' | 'result' | 'gameover';
 }
 
-type GlobalWithRooms = typeof globalThis & {
-  __gageGuessRooms?: Map<string, Room>;
+// Active WebSocket connections tracked in memory
+type GlobalWithSockets = typeof globalThis & {
+  __gageGuessSockets?: Map<string, Player>;
 };
 
-const globalScope = globalThis as GlobalWithRooms;
+const globalScope = globalThis as GlobalWithSockets;
 
-if (!globalScope.__gageGuessRooms) {
-  globalScope.__gageGuessRooms = new Map<string, Room>();
+if (!globalScope.__gageGuessSockets) {
+  globalScope.__gageGuessSockets = new Map<string, Player>();
 }
 
-const rooms = globalScope.__gageGuessRooms;
+const sockets = globalScope.__gageGuessSockets;
 
 function generateRoomCode(): string {
   return Math.random().toString(36).substring(2, 8).toUpperCase();
@@ -40,9 +46,24 @@ function normalizeRoomCode(code: string): string {
   return code.trim().toUpperCase();
 }
 
-function broadcastToRoom(room: Room, message: any, excludeId?: string) {
+async function getRoomPlayers(roomCode: string): Promise<Player[]> {
+  const { data } = await supabase
+    .from('game_players')
+    .select('*')
+    .eq('room_code', roomCode);
+  
+  return (data || []).map(p => ({
+    id: p.player_id,
+    socket: sockets.get(p.player_id)!.socket,
+    isHost: p.is_host,
+    number: p.number,
+  })).filter(p => p.socket);
+}
+
+async function broadcastToRoom(roomCode: string, message: any, excludeId?: string) {
+  const players = await getRoomPlayers(roomCode);
   const messageStr = JSON.stringify(message);
-  room.players.forEach(player => {
+  players.forEach(player => {
     if (player.id !== excludeId && player.socket.readyState === WebSocket.OPEN) {
       player.socket.send(messageStr);
     }
@@ -67,7 +88,7 @@ serve(async (req) => {
     console.log("WebSocket connection opened");
   };
 
-  socket.onmessage = (event) => {
+  socket.onmessage = async (event) => {
     try {
       const data = JSON.parse(event.data);
       console.log("Received message:", data);
@@ -82,6 +103,36 @@ serve(async (req) => {
             socket,
             isHost: true,
           };
+          
+          sockets.set(playerId, currentPlayer);
+
+          // Create room in database
+          const { error: roomError } = await supabase
+            .from('game_rooms')
+            .insert({
+              code: roomCode,
+              max_number: data.maxNumber,
+              has_used_reverse: false,
+              state: 'waiting',
+            });
+
+          if (roomError) {
+            console.error("Error creating room:", roomError);
+            socket.send(JSON.stringify({
+              type: 'error',
+              message: 'Failed to create room',
+            }));
+            return;
+          }
+
+          // Add player to database
+          await supabase
+            .from('game_players')
+            .insert({
+              room_code: roomCode,
+              player_id: playerId,
+              is_host: true,
+            });
 
           currentRoom = {
             code: roomCode,
@@ -91,9 +142,7 @@ serve(async (req) => {
             state: 'waiting',
           };
 
-          rooms.set(roomCode, currentRoom);
           console.log("Room created with code:", roomCode);
-          console.log("Total rooms:", rooms.size);
 
           socket.send(JSON.stringify({
             type: 'room_created',
@@ -114,18 +163,30 @@ serve(async (req) => {
 
           const requestedCode = normalizeRoomCode(data.code);
           console.log("Join request for code:", requestedCode);
-          console.log("Available rooms:", Array.from(rooms.keys()));
-          const room = rooms.get(requestedCode);
-          if (!room) {
+          
+          // Check if room exists in database
+          const { data: roomData, error: roomFetchError } = await supabase
+            .from('game_rooms')
+            .select('*')
+            .eq('code', requestedCode)
+            .single();
+
+          if (roomFetchError || !roomData) {
             console.log("Room not found for code:", requestedCode);
             socket.send(JSON.stringify({
               type: 'error',
-              message: `Room not found. Code: ${requestedCode}. Available: ${Array.from(rooms.keys()).join(', ')}`,
+              message: 'Room not found',
             }));
             return;
           }
 
-          if (room.players.length >= 2) {
+          // Check player count
+          const { data: playersData } = await supabase
+            .from('game_players')
+            .select('*')
+            .eq('room_code', requestedCode);
+
+          if (playersData && playersData.length >= 2) {
             socket.send(JSON.stringify({
               type: 'error',
               message: 'Room is full',
@@ -139,27 +200,47 @@ serve(async (req) => {
             socket,
             isHost: false,
           };
+          
+          sockets.set(newPlayerId, currentPlayer);
 
-          room.players.push(currentPlayer);
-          currentRoom = room;
+          // Add player to database
+          await supabase
+            .from('game_players')
+            .insert({
+              room_code: requestedCode,
+              player_id: newPlayerId,
+              is_host: false,
+            });
+
+          currentRoom = {
+            code: requestedCode,
+            maxNumber: roomData.max_number,
+            players: await getRoomPlayers(requestedCode),
+            hasUsedReverse: roomData.has_used_reverse,
+            state: roomData.state as any,
+          };
 
           socket.send(JSON.stringify({
             type: 'room_joined',
-            code: room.code,
+            code: requestedCode,
             playerId: newPlayerId,
-            maxNumber: room.maxNumber,
+            maxNumber: roomData.max_number,
           }));
 
-          broadcastToRoom(room, {
+          await broadcastToRoom(requestedCode, {
             type: 'player_joined',
-            playerCount: room.players.length,
+            playerCount: currentRoom.players.length,
           }, newPlayerId);
 
-          if (room.players.length === 2) {
-            room.state = 'playing';
-            broadcastToRoom(room, {
+          if (currentRoom.players.length === 2) {
+            await supabase
+              .from('game_rooms')
+              .update({ state: 'playing' })
+              .eq('code', requestedCode);
+              
+            await broadcastToRoom(requestedCode, {
               type: 'game_start',
-              maxNumber: room.maxNumber,
+              maxNumber: roomData.max_number,
             });
           }
           break;
@@ -174,33 +255,42 @@ serve(async (req) => {
           }
 
           currentPlayer.number = data.number;
+          
+          // Update player number in database
+          await supabase
+            .from('game_players')
+            .update({ number: data.number })
+            .eq('room_code', currentRoom.code)
+            .eq('player_id', currentPlayer.id);
 
-          broadcastToRoom(currentRoom, {
+          await broadcastToRoom(currentRoom.code, {
             type: 'player_ready',
             playerId: currentPlayer.id,
           });
 
-          const allReady = currentRoom.players.every(p => p.number !== undefined);
-          if (allReady) {
-            const [player1, player2] = currentRoom.players;
+          // Check if all ready
+          const { data: allPlayers } = await supabase
+            .from('game_players')
+            .select('*')
+            .eq('room_code', currentRoom.code);
+
+          const allReady = allPlayers && allPlayers.every(p => p.number !== null);
+          if (allReady && allPlayers.length === 2) {
+            const [player1, player2] = allPlayers;
             const isMatch = player1.number === player2.number;
 
-            if (isMatch) {
-              currentRoom.state = 'gameover';
-              broadcastToRoom(currentRoom, {
-                type: 'game_result',
-                match: true,
-                numbers: [player1.number, player2.number],
-              });
-            } else {
-              currentRoom.state = 'result';
-              broadcastToRoom(currentRoom, {
-                type: 'game_result',
-                match: false,
-                numbers: [player1.number, player2.number],
-                canReverse: !currentRoom.hasUsedReverse,
-              });
-            }
+            const newState = isMatch ? 'gameover' : 'result';
+            await supabase
+              .from('game_rooms')
+              .update({ state: newState })
+              .eq('code', currentRoom.code);
+
+            await broadcastToRoom(currentRoom.code, {
+              type: 'game_result',
+              match: isMatch,
+              numbers: [player1.number, player2.number],
+              canReverse: !currentRoom.hasUsedReverse,
+            });
           }
           break;
 
@@ -221,14 +311,29 @@ serve(async (req) => {
             return;
           }
 
-          currentRoom.hasUsedReverse = true;
           const newMax = Math.max(2, Math.ceil(currentRoom.maxNumber / 2));
+          
+          // Update room in database
+          await supabase
+            .from('game_rooms')
+            .update({
+              has_used_reverse: true,
+              max_number: newMax,
+              state: 'playing',
+            })
+            .eq('code', currentRoom.code);
+
+          // Reset player numbers
+          await supabase
+            .from('game_players')
+            .update({ number: null })
+            .eq('room_code', currentRoom.code);
+
+          currentRoom.hasUsedReverse = true;
           currentRoom.maxNumber = newMax;
           currentRoom.state = 'playing';
-          
-          currentRoom.players.forEach(p => p.number = undefined);
 
-          broadcastToRoom(currentRoom, {
+          await broadcastToRoom(currentRoom.code, {
             type: 'reverse_activated',
             newMaxNumber: newMax,
           });
@@ -243,11 +348,25 @@ serve(async (req) => {
             return;
           }
 
+          // Reset room in database
+          await supabase
+            .from('game_rooms')
+            .update({
+              has_used_reverse: false,
+              state: 'playing',
+            })
+            .eq('code', currentRoom.code);
+
+          // Reset player numbers
+          await supabase
+            .from('game_players')
+            .update({ number: null })
+            .eq('room_code', currentRoom.code);
+
           currentRoom.hasUsedReverse = false;
           currentRoom.state = 'playing';
-          currentRoom.players.forEach(p => p.number = undefined);
 
-          broadcastToRoom(currentRoom, {
+          await broadcastToRoom(currentRoom.code, {
             type: 'game_reset',
             maxNumber: currentRoom.maxNumber,
           });
@@ -262,17 +381,34 @@ serve(async (req) => {
     }
   };
 
-  socket.onclose = () => {
+  socket.onclose = async () => {
     console.log("WebSocket connection closed");
     if (currentRoom && currentPlayer) {
-      currentRoom.players = currentRoom.players.filter(p => p.id !== currentPlayer?.id);
+      // Remove player from database
+      await supabase
+        .from('game_players')
+        .delete()
+        .eq('room_code', currentRoom.code)
+        .eq('player_id', currentPlayer.id);
+
+      sockets.delete(currentPlayer.id);
+
+      // Check remaining players
+      const { data: remainingPlayers } = await supabase
+        .from('game_players')
+        .select('*')
+        .eq('room_code', currentRoom.code);
       
-      if (currentRoom.players.length === 0) {
-        rooms.delete(currentRoom.code);
+      if (!remainingPlayers || remainingPlayers.length === 0) {
+        // Delete room if empty
+        await supabase
+          .from('game_rooms')
+          .delete()
+          .eq('code', currentRoom.code);
       } else {
-        broadcastToRoom(currentRoom, {
+        await broadcastToRoom(currentRoom.code, {
           type: 'player_left',
-          playerCount: currentRoom.players.length,
+          playerCount: remainingPlayers.length,
         });
       }
     }
